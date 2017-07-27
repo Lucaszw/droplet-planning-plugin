@@ -280,7 +280,7 @@ class RouteController(object):
         # duplicate states for the same electrode.
         modified_electrode_states = (active_electrode_mask.astype(bool)
                                      .sort_values(ascending=False))
-        self.plugin.execute('wheelerlab.electrode_controller_plugin',
+        self.plugin.execute('microdrop.electrode_controller_plugin',
                             'set_electrode_states',
                             electrode_states=modified_electrode_states,
                             save=False, wait_func=lambda *args: refresh_gui())
@@ -299,8 +299,7 @@ class RouteController(object):
             # Deactivate all electrodes belonging to all routes.
             electrode_states = pd.Series(0, index=self.route_info
                                          ['electrode_ids'], dtype=int)
-            self.plugin.execute('wheelerlab'
-                                '.electrode_controller_plugin',
+            self.plugin.execute('microdrop.electrode_controller_plugin',
                                 'set_electrode_states',
                                 electrode_states=electrode_states,
                                 save=False, wait_func=lambda *args:
@@ -356,8 +355,7 @@ class DropletPlanningPlugin(Plugin, StepOptionsController):
         """
         if function_name in ['on_step_run']:
             # Execute `on_step_run` before control board.
-            return [ScheduleRequest(self.name,
-                                    'wheelerlab.dmf_control_board_plugin')]
+            return [ScheduleRequest(self.name, 'dmf_control_board_plugin')]
         return []
 
     def on_plugin_enable(self):
@@ -554,3 +552,7 @@ class DropletPlanningPlugin(Plugin, StepOptionsController):
 
 
 PluginGlobals.pop_env()
+
+from ._version import get_versions
+__version__ = get_versions()['version']
+del get_versions
