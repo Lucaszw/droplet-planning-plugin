@@ -18,6 +18,7 @@ along with droplet_planning_plugin.  If not, see <http://www.gnu.org/licenses/>.
 """
 from collections import OrderedDict
 from datetime import datetime
+import json
 import logging
 
 from flatland import Integer, Form
@@ -33,6 +34,7 @@ from zmq_plugin.plugin import Plugin as ZmqPlugin
 from zmq_plugin.schema import decode_content_data
 import gobject
 import pandas as pd
+import paho_mqtt_helpers as pmh
 import zmq
 
 logger = logging.getLogger(__name__)
@@ -56,24 +58,6 @@ class RouteControllerZmqPlugin(ZmqPlugin):
         else:
             self.on_command_recv(msg_frames)
         return True
-
-    def on_execute__add_route(self, request):
-        data = decode_content_data(request)
-        try:
-            return self.parent.add_route(data['drop_route'])
-        except:
-            logger.error(str(data), exc_info=True)
-
-    def on_execute__get_routes(self, request):
-        return self.parent.get_routes()
-
-    def on_execute__clear_routes(self, request):
-        data = decode_content_data(request)
-        try:
-            return self.parent.clear_routes(electrode_id=
-                                            data.get('electrode_id'))
-        except:
-            logger.error(str(data), exc_info=True)
 
     def on_execute__execute_routes(self, request):
         data = decode_content_data(request)
@@ -307,7 +291,7 @@ class RouteController(object):
         self.route_info = {'transition_counter': 0}
 
 
-class DropletPlanningPlugin(Plugin, StepOptionsController):
+class DropletPlanningPlugin(Plugin, StepOptionsController, pmh.BaseMqttReactor):
     """
     This class is automatically registered with the PluginManager.
     """
@@ -341,12 +325,18 @@ class DropletPlanningPlugin(Plugin, StepOptionsController):
         .using(optional=True, default=750,
                validators=[ValueAtLeast(minimum=0)]))
 
-    def __init__(self):
+    def __init__(self,*args, **kwargs):
         self.name = self.plugin_name
         self.plugin = None
         self.plugin_timeout_id = None
         self.step_start_time = None
         self.route_controller = None
+        pmh.BaseMqttReactor.__init__(self)
+        self.start()
+        self.mqtt_client.subscribe("microdrop/dmf-device-ui/add-route")
+        self.mqtt_client.subscribe("microdrop/dmf-device-ui/get-routes")
+        self.mqtt_client.subscribe("microdrop/dmf-device-ui/clear-routes")
+        self.mqtt_client.subscribe('microdrop/dmf-device-ui/execute-routes')
 
     def get_schedule_requests(self, function_name):
         """
@@ -357,6 +347,20 @@ class DropletPlanningPlugin(Plugin, StepOptionsController):
             # Execute `on_step_run` before control board.
             return [ScheduleRequest(self.name, 'dmf_control_board_plugin')]
         return []
+
+    def on_message(self, client, userdata, msg):
+        '''
+        Callback for when a ``PUBLISH`` message is received from the broker.
+        '''
+        logger.info('[on_message] %s: "%s"', msg.topic, msg.payload)
+        if msg.topic == 'microdrop/dmf-device-ui/add-route':
+            self.add_route(json.loads(msg.payload))
+        if msg.topic == 'microdrop/dmf-device-ui/get-routes':
+            self.get_routes(json.loads(msg.payload))
+        if msg.topic == 'microdrop/dmf-device-ui/clear-routes':
+            self.clear_routes(json.loads(msg.payload))
+        if msg.topic == 'microdrop/dmf-device-ui/execute-routes':
+            self.execute_routes(json.loads(msg.payload))
 
     def on_plugin_enable(self):
         self.cleanup()
@@ -542,8 +546,47 @@ class DropletPlanningPlugin(Plugin, StepOptionsController):
 
     def get_routes(self, step_number=None):
         step_options = self.get_step_options(step_number=step_number)
-        return step_options.get('drop_routes',
+        x = step_options.get('drop_routes',
                                 RouteController.default_routes())
+        self.mqtt_client.publish('microdrop/droplet-planning-plugin/routes-set',
+                                 x.to_json())
+        return x
+
+    def execute_routes(self, data):
+        # TODO allow for passing of both electrode_id and route_i
+        # Currently electrode_id only
+
+        try:
+            df_routes = self.get_routes()
+            step_options = self.get_step_options()
+
+            if 'transition_duration_ms' in data:
+                transition_duration_ms = data['transition_duration_ms']
+            else:
+                transition_duration_ms = step_options['transition_duration_ms']
+
+            if 'trail_length' in data:
+                trail_length = data['trail_length']
+            else:
+                trail_length = step_options['trail_length']
+
+            if 'route_i' in data:
+                df_routes = df_routes.loc[df_routes.route_i == data['route_i']]
+            elif 'electrode_i' in data:
+                if data['electrode_i'] is not None:
+                    routes_to_execute = df_routes.loc[df_routes.electrode_i ==
+                                                      data['electrode_i'],
+                                                      'route_i']
+                    df_routes = df_routes.loc[df_routes.route_i
+                                              .isin(routes_to_execute
+                                                    .tolist())].copy()
+
+            route_controller = RouteController(self.plugin)
+            route_controller.execute_routes(df_routes, transition_duration_ms,
+                                            trail_length=trail_length)
+        except:
+            logger.error(str(data), exc_info=True)
+
 
     def set_routes(self, df_routes, step_number=None):
         step_options = self.get_step_options(step_number=step_number)
