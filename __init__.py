@@ -41,66 +41,12 @@ logger = logging.getLogger(__name__)
 
 PluginGlobals.push_env('microdrop.managed')
 
-
-class RouteControllerZmqPlugin(ZmqPlugin):
-    '''
-    API for adding/clearing droplet routes.
-    '''
-    def __init__(self, parent, *args, **kwargs):
-        self.parent = parent
-        super(RouteControllerZmqPlugin, self).__init__(*args, **kwargs)
-
-    def check_sockets(self):
-        try:
-            msg_frames = self.command_socket.recv_multipart(zmq.NOBLOCK)
-        except zmq.Again:
-            pass
-        else:
-            self.on_command_recv(msg_frames)
-        return True
-
-    def on_execute__execute_routes(self, request):
-        data = decode_content_data(request)
-        try:
-            df_routes = self.parent.get_routes()
-            step_options = self.parent.get_step_options()
-            # Set transition duration based on request parameter.  If no
-            # duration was provided, use the transition duration from the
-            # current step.
-            transition_duration_ms = data.get('transition_duration_ms',
-                                              step_options
-                                              ['transition_duration_ms'])
-            # Set trail length based on request parameter.  If no trail length
-            # was provided, use the trail length from the current step.
-            trail_length = data.get('trail_length',
-                                    step_options['trail_length'])
-            if 'route_i' in data:
-                # A route index was specified.  Only process transitions from
-                # specified route.
-                df_routes = df_routes.loc[df_routes.route_i == data['route_i']]
-            elif 'electrode_id' in data and data['electrode_id'] is not None:
-                # An electrode identifier was specified.  Only process routes
-                # passing through specified electrode.
-                routes_to_execute = df_routes.loc[df_routes.electrode_i ==
-                                                  data['electrode_id'],
-                                                  'route_i']
-                # Select only routes that include electrode.
-                df_routes = df_routes.loc[df_routes.route_i
-                                          .isin(routes_to_execute
-                                                .tolist())].copy()
-            route_controller = RouteController(self)
-            route_controller.execute_routes(df_routes, transition_duration_ms,
-                                            trail_length=trail_length)
-        except:
-            logger.error(str(data), exc_info=True)
-
-
 class RouteController(object):
     '''
     Manage execution of a set of routes in lock-step.
     '''
-    def __init__(self, plugin):
-        self.plugin = plugin
+    def __init__(self, parent=None):
+        self.parent = parent
         self.route_info = {}
 
     @staticmethod
@@ -264,10 +210,15 @@ class RouteController(object):
         # duplicate states for the same electrode.
         modified_electrode_states = (active_electrode_mask.astype(bool)
                                      .sort_values(ascending=False))
-        self.plugin.execute('microdrop.electrode_controller_plugin',
-                            'set_electrode_states',
-                            electrode_states=modified_electrode_states,
-                            save=False, wait_func=lambda *args: refresh_gui())
+
+        data = {}
+        data['electrode_states'] = modified_electrode_states.to_json()
+        data['save'] = False
+        data['wait_func'] = 'lambda *args: refresh_gui()'
+
+        # TODO: May need to use some form of wait method like refresh_gui()
+        topic = 'microdrop/droplet-planning-plugin/set-electrode-states'
+        self.parent.mqtt_client.publish(topic,json.dumps(data))
 
     def reset(self):
         '''
@@ -283,11 +234,14 @@ class RouteController(object):
             # Deactivate all electrodes belonging to all routes.
             electrode_states = pd.Series(0, index=self.route_info
                                          ['electrode_ids'], dtype=int)
-            self.plugin.execute('microdrop.electrode_controller_plugin',
-                                'set_electrode_states',
-                                electrode_states=electrode_states,
-                                save=False, wait_func=lambda *args:
-                                refresh_gui())
+
+            data = {}
+            data['electrode_states'] = electrode_states.to_json()
+            data['save'] = False
+
+            self.parent.mqtt_client.publish('microdrop/droplet-planning-plugin/'
+                                    'set-electrode-states', json.dumps(data))
+
         self.route_info = {'transition_counter': 0}
 
 
@@ -327,8 +281,6 @@ class DropletPlanningPlugin(Plugin, StepOptionsController, pmh.BaseMqttReactor):
 
     def __init__(self,*args, **kwargs):
         self.name = self.plugin_name
-        self.plugin = None
-        self.plugin_timeout_id = None
         self.step_start_time = None
         self.route_controller = None
         pmh.BaseMqttReactor.__init__(self)
@@ -363,32 +315,19 @@ class DropletPlanningPlugin(Plugin, StepOptionsController, pmh.BaseMqttReactor):
             self.execute_routes(json.loads(msg.payload))
 
     def on_plugin_enable(self):
-        self.cleanup()
-        self.plugin = RouteControllerZmqPlugin(self, self.name, get_hub_uri())
-        self.route_controller = RouteController(self.plugin)
-        # Initialize sockets.
-        self.plugin.reset()
-
-        self.plugin_timeout_id = gobject.timeout_add(10,
-                                                     self.plugin.check_sockets)
+        self.route_controller = RouteController(self)
 
     def on_plugin_disable(self):
         """
         Handler called once the plugin instance is disabled.
         """
-        self.cleanup()
+        pass
 
     def on_app_exit(self):
         """
         Handler called just before the Microdrop application exits.
         """
-        self.cleanup()
-
-    def cleanup(self):
-        if self.plugin_timeout_id is not None:
-            gobject.source_remove(self.plugin_timeout_id)
-        if self.plugin is not None:
-            self.plugin = None
+        pass
 
     ###########################################################################
     # Step event handler methods
@@ -493,8 +432,8 @@ class DropletPlanningPlugin(Plugin, StepOptionsController, pmh.BaseMqttReactor):
         logger.info('[on_step_swapped] old step=%s, step=%s', old_step_number,
                     step_number)
         self.kill_running_step()
-        if self.plugin is not None:
-            self.plugin.execute_async(self.name, 'get_routes')
+        self.mqtt_client.publish('microdrop/droplet-planning-plugin/get-routes',
+                                    json.dumps(None))
 
     def on_step_inserted(self, step_number, *args):
         app = get_app()
@@ -581,7 +520,7 @@ class DropletPlanningPlugin(Plugin, StepOptionsController, pmh.BaseMqttReactor):
                                               .isin(routes_to_execute
                                                     .tolist())].copy()
 
-            route_controller = RouteController(self.plugin)
+            route_controller = RouteController(self)
             route_controller.execute_routes(df_routes, transition_duration_ms,
                                             trail_length=trail_length)
         except:
