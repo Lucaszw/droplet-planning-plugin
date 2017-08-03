@@ -30,8 +30,7 @@ from microdrop.plugin_manager import (PluginGlobals, Plugin, IPlugin,
 from pygtkhelpers.utils import refresh_gui
 from path_helpers import path
 from si_prefix import si_format
-from zmq_plugin.plugin import Plugin as ZmqPlugin
-from zmq_plugin.schema import decode_content_data
+
 import gobject
 import pandas as pd
 import paho_mqtt_helpers as pmh
