@@ -23,6 +23,8 @@ import logging
 
 from flatland import Integer, Form
 from flatland.validation import ValueAtLeast
+from flatland.out.markup import Generator
+from flatland_helpers import flatlandToDict
 from microdrop.app_context import get_app, get_hub_uri
 from microdrop.plugin_helpers import StepOptionsController, get_plugin_info
 from microdrop.plugin_manager import (PluginGlobals, Plugin, IPlugin,
@@ -30,6 +32,7 @@ from microdrop.plugin_manager import (PluginGlobals, Plugin, IPlugin,
 from pygtkhelpers.utils import refresh_gui
 from path_helpers import path
 from si_prefix import si_format
+from zmq_plugin.schema import PandasJsonEncoder
 
 import gobject
 import pandas as pd
@@ -211,13 +214,13 @@ class RouteController(object):
                                      .sort_values(ascending=False))
 
         data = {}
-        data['electrode_states'] = modified_electrode_states.to_json()
+        data['electrode_states'] = modified_electrode_states
         data['save'] = False
-        data['wait_func'] = 'lambda *args: refresh_gui()'
 
-        # TODO: May need to use some form of wait method like refresh_gui()
+        msg = json.dumps(data, cls=PandasJsonEncoder)
+
         topic = 'microdrop/droplet-planning-plugin/set-electrode-states'
-        self.parent.mqtt_client.publish(topic,json.dumps(data))
+        self.parent.mqtt_client.publish(topic,msg)
 
     def reset(self):
         '''
@@ -235,11 +238,11 @@ class RouteController(object):
                                          ['electrode_ids'], dtype=int)
 
             data = {}
-            data['electrode_states'] = electrode_states.to_json()
+            data['electrode_states'] = electrode_states
             data['save'] = False
 
-            self.parent.mqtt_client.publish('microdrop/droplet-planning-plugin/'
-                                    'set-electrode-states', json.dumps(data))
+            self.parent.mqtt_client.publish('microdrop/droplet-planning-plugin/set-electrode-states',
+                                    json.dumps(data, cls=PandasJsonEncoder))
 
         self.route_info = {'transition_counter': 0}
 
@@ -288,6 +291,8 @@ class DropletPlanningPlugin(Plugin, StepOptionsController, pmh.BaseMqttReactor):
         self.mqtt_client.subscribe("microdrop/dmf-device-ui/get-routes")
         self.mqtt_client.subscribe("microdrop/dmf-device-ui/clear-routes")
         self.mqtt_client.subscribe('microdrop/dmf-device-ui/execute-routes')
+        self.mqtt_client.subscribe('microdrop/dmf-device-ui/update-protocol')
+        self.mqtt_client.subscribe("microdrop/mqtt-plugin/step-inserted")
 
     def get_schedule_requests(self, function_name):
         """
@@ -307,14 +312,33 @@ class DropletPlanningPlugin(Plugin, StepOptionsController, pmh.BaseMqttReactor):
         if msg.topic == 'microdrop/dmf-device-ui/add-route':
             self.add_route(json.loads(msg.payload))
         if msg.topic == 'microdrop/dmf-device-ui/get-routes':
-            self.get_routes(json.loads(msg.payload))
+            self.get_routes()
         if msg.topic == 'microdrop/dmf-device-ui/clear-routes':
-            self.clear_routes(json.loads(msg.payload))
+            data = json.loads(msg.payload)
+            if data:
+                self.clear_routes(electrode_id=data['electrode_id'])
+            else:
+                self.clear_routes()
         if msg.topic == 'microdrop/dmf-device-ui/execute-routes':
             self.execute_routes(json.loads(msg.payload))
+        if msg.topic == 'microdrop/dmf-device-ui/update-protocol':
+            self.update_protocol(json.loads(msg.payload))
+        if msg.topic == "microdrop/mqtt-plugin/step-inserted":
+            self.step_inserted(json.loads(msg.payload))
 
     def on_plugin_enable(self):
         self.route_controller = RouteController(self)
+        form = flatlandToDict(self.StepFields)
+        self.mqtt_client.publish('microdrop/droplet-planning-plugin/schema',
+                                  json.dumps(form),
+                                  retain=True)
+
+        defaults = {}
+        for k,v in form.iteritems():
+            defaults[k] = v['default']
+        self.mqtt_client.publish('microdrop/droplet-planning-plugin/step-options',
+                                  json.dumps([defaults], cls=PandasJsonEncoder),
+                                  retain=True)
 
     def on_plugin_disable(self):
         """
@@ -424,6 +448,12 @@ class DropletPlanningPlugin(Plugin, StepOptionsController, pmh.BaseMqttReactor):
                     step_number)
         self.kill_running_step()
 
+    def on_step_removed(self, step_number, step):
+        self.update_steps()
+
+    def on_step_options_changed(self, plugin, step_number):
+        self.update_steps()
+
     def on_step_swapped(self, old_step_number, step_number):
         """
         Handler called when the current step is swapped.
@@ -431,10 +461,12 @@ class DropletPlanningPlugin(Plugin, StepOptionsController, pmh.BaseMqttReactor):
         logger.info('[on_step_swapped] old step=%s, step=%s', old_step_number,
                     step_number)
         self.kill_running_step()
-        self.mqtt_client.publish('microdrop/droplet-planning-plugin/get-routes',
-                                    json.dumps(None))
+        self.get_routes()
 
     def on_step_inserted(self, step_number, *args):
+        self.step_inserted(step_number)
+
+    def step_inserted(self, step_number):
         app = get_app()
         logger.info('[on_step_inserted] current step=%s, created step=%s',
                     app.protocol.current_step_number, step_number)
@@ -442,6 +474,22 @@ class DropletPlanningPlugin(Plugin, StepOptionsController, pmh.BaseMqttReactor):
 
     ###########################################################################
     # Step options dependent methods
+    def update_protocol(self, protocol):
+        app = get_app()
+
+        for i, s in enumerate(protocol):
+
+            step = app.protocol.steps[i]
+            prevData = step.get_data(self.plugin_name)
+            values = {}
+
+            for k,v in prevData.iteritems():
+                values[k] = s[k]
+
+            step.set_data(self.plugin_name, values)
+            emit_signal('on_step_options_changed', [self.plugin_name, i],
+                        interface=IPlugin)
+
     def add_route(self, electrode_ids):
         '''
         Add droplet route.
@@ -486,8 +534,9 @@ class DropletPlanningPlugin(Plugin, StepOptionsController, pmh.BaseMqttReactor):
         step_options = self.get_step_options(step_number=step_number)
         x = step_options.get('drop_routes',
                                 RouteController.default_routes())
+        msg = json.dumps(x, cls=PandasJsonEncoder)
         self.mqtt_client.publish('microdrop/droplet-planning-plugin/routes-set',
-                                 x.to_json())
+                                 msg, retain=True)
         return x
 
     def execute_routes(self, data):
@@ -525,12 +574,22 @@ class DropletPlanningPlugin(Plugin, StepOptionsController, pmh.BaseMqttReactor):
         except:
             logger.error(str(data), exc_info=True)
 
+    def update_steps(self):
+        app = get_app()
+        num_steps = len(app.protocol.steps)
+
+        protocol = []
+        for i in range(num_steps):
+            protocol.append(self.get_step_options(i))
+
+        self.mqtt_client.publish('microdrop/droplet-planning-plugin/step-options',
+                                  json.dumps(protocol, cls=PandasJsonEncoder),
+                                  retain=True)
 
     def set_routes(self, df_routes, step_number=None):
         step_options = self.get_step_options(step_number=step_number)
         step_options['drop_routes'] = df_routes
         self.set_step_values(step_options, step_number=step_number)
-
 
 PluginGlobals.pop_env()
 
