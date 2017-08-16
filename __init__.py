@@ -287,12 +287,6 @@ class DropletPlanningPlugin(Plugin, StepOptionsController, pmh.BaseMqttReactor):
         self.route_controller = None
         pmh.BaseMqttReactor.__init__(self)
         self.start()
-        self.mqtt_client.subscribe("microdrop/dmf-device-ui/add-route")
-        self.mqtt_client.subscribe("microdrop/dmf-device-ui/get-routes")
-        self.mqtt_client.subscribe("microdrop/dmf-device-ui/clear-routes")
-        self.mqtt_client.subscribe('microdrop/dmf-device-ui/execute-routes')
-        self.mqtt_client.subscribe('microdrop/dmf-device-ui/update-protocol')
-        self.mqtt_client.subscribe("microdrop/mqtt-plugin/step-inserted")
 
     def get_schedule_requests(self, function_name):
         """
@@ -303,6 +297,14 @@ class DropletPlanningPlugin(Plugin, StepOptionsController, pmh.BaseMqttReactor):
             # Execute `on_step_run` before control board.
             return [ScheduleRequest(self.name, 'dmf_control_board_plugin')]
         return []
+
+    def on_connect(self, client, userdata, flags, rc):
+        self.mqtt_client.subscribe("microdrop/dmf-device-ui/add-route")
+        self.mqtt_client.subscribe("microdrop/dmf-device-ui/get-routes")
+        self.mqtt_client.subscribe("microdrop/dmf-device-ui/clear-routes")
+        self.mqtt_client.subscribe('microdrop/dmf-device-ui/execute-routes')
+        self.mqtt_client.subscribe('microdrop/dmf-device-ui/update-protocol')
+        self.mqtt_client.subscribe("microdrop/mqtt-plugin/step-inserted")
 
     def on_message(self, client, userdata, msg):
         '''
@@ -484,7 +486,8 @@ class DropletPlanningPlugin(Plugin, StepOptionsController, pmh.BaseMqttReactor):
             values = {}
 
             for k,v in prevData.iteritems():
-                values[k] = s[k]
+                if k in s:
+                    values[k] = s[k]
 
             step.set_data(self.plugin_name, values)
             emit_signal('on_step_options_changed', [self.plugin_name, i],
