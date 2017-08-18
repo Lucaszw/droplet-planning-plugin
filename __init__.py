@@ -313,6 +313,7 @@ class DropletPlanningPlugin(Plugin, StepOptionsController, pmh.BaseMqttReactor):
         logger.info('[on_message] %s: "%s"', msg.topic, msg.payload)
         if msg.topic == 'microdrop/dmf-device-ui/add-route':
             self.add_route(json.loads(msg.payload))
+            self.get_routes()
         if msg.topic == 'microdrop/dmf-device-ui/get-routes':
             self.get_routes()
         if msg.topic == 'microdrop/dmf-device-ui/clear-routes':
@@ -532,6 +533,7 @@ class DropletPlanningPlugin(Plugin, StepOptionsController, pmh.BaseMqttReactor):
                                       .isin(routes_to_clear.tolist())].copy()
         step_options['drop_routes'] = df_routes
         self.set_step_values(step_options, step_number=step_number)
+        self.get_routes()
 
     def get_routes(self, step_number=None):
         step_options = self.get_step_options(step_number=step_number)
