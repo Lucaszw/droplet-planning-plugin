@@ -18,8 +18,14 @@ along with droplet_planning_plugin.  If not, see <http://www.gnu.org/licenses/>.
 """
 from collections import OrderedDict
 from datetime import datetime
+from threading import Timer
+import atexit
 import json
 import logging
+import os
+import signal
+import sys
+import time
 
 from flatland import Integer, Form
 from flatland.validation import ValueAtLeast
@@ -29,7 +35,7 @@ from microdrop.app_context import get_app, get_hub_uri
 from microdrop.plugin_helpers import StepOptionsController, get_plugin_info
 from microdrop.plugin_manager import (PluginGlobals, Plugin, IPlugin,
                                       ScheduleRequest, implements, emit_signal)
-from pygtkhelpers.utils import refresh_gui
+# from pygtkhelpers.utils import refresh_gui
 from path_helpers import path
 from si_prefix import si_format
 from zmq_plugin.schema import PandasJsonEncoder, pandas_object_hook
@@ -117,10 +123,11 @@ class RouteController(object):
                                             route_groups])
         route_info['start_time'] = datetime.now()
 
-        def _first_pass():
-            # Execute first route transition immediately.
-            self.check_routes_progress(on_complete, on_error, False)
-        gobject.idle_add(_first_pass)
+        #def _first_pass():
+        #    # Execute first route transition immediately.
+        #    self.check_routes_progress(on_complete, on_error, False)
+        #gobject.idle_add(_first_pass)
+        self.check_routes_progress(on_complete, on_error, False)
 
     def check_routes_progress(self, on_complete, on_error, continue_=True):
         '''
@@ -141,10 +148,18 @@ class RouteController(object):
 
                 # Execute remaining route transitions periodically, at the
                 # specified interval duration.
-                route_info['timeout_id'] =\
-                    gobject.timeout_add(route_info['transition_duration_ms'],
-                                        self.check_routes_progress,
-                                        on_complete, on_error)
+                # route_info['timeout_id'] =\
+                # s.enter(route_info['transition_duration_ms']/500,1,
+                #         self.check_routes_progress, (on_complete, on_error))
+                # s.run()
+                Timer(route_info['transition_duration_ms']/500.,
+                      self.check_routes_progress, (on_complete, on_error)).start()
+
+                # route_info['timeout_id'] =\
+                #     s.enter(5, 1, print_time, ())
+                #     gobject.timeout_add(route_info['transition_duration_ms'],
+                #                         self.check_routes_progress,
+                #                         on_complete, on_error)
             else:
                 # All route transitions have executed.
                 self.reset()
@@ -285,6 +300,7 @@ class DropletPlanningPlugin(Plugin, pmh.BaseMqttReactor):
         self.name = self.plugin_name
         self.step_start_time = None
         self.route_controller = None
+        self.should_exit = False
         pmh.BaseMqttReactor.__init__(self)
         self._props = {
             "routes": None,
@@ -294,6 +310,25 @@ class DropletPlanningPlugin(Plugin, pmh.BaseMqttReactor):
             "route_repeats": None
             }
         self.start()
+
+    def start(self):
+        # Connect to MQTT broker.
+        self._connect()
+        # Start loop in background thread.
+        signal.signal(signal.SIGINT, self.exit)
+        self.mqtt_client.loop_forever()
+
+    def on_disconnect(self, *args, **kwargs):
+        # Startup Mqtt Loop after disconnected (unless should terminate)
+        if self.should_exit:
+            sys.exit()
+        self._connect()
+        self.mqtt_client.loop_forever()
+
+    def exit(self,a=None,b=None):
+        self.mqtt_client.publish("microdrop/droplet-planning-plugin/plugin-exited","{}", retain=True)
+        self.should_exit = True
+        self.mqtt_client.disconnect()
 
     def on_connect(self, client, userdata, flags, rc):
         self.mqtt_client.subscribe("microdrop/dmf-device-ui/add-route")
@@ -306,6 +341,12 @@ class DropletPlanningPlugin(Plugin, pmh.BaseMqttReactor):
         self.mqtt_client.subscribe("microdrop/put/droplet-planning-plugin/state/routes")
         self.mqtt_client.subscribe("microdrop/put/droplet-planning-plugin/state/trail-length")
         self.mqtt_client.subscribe("microdrop/put/droplet-planning-plugin/state/transition-duration-ms")
+        self.mqtt_client.subscribe("microdrop/droplet-planning-plugin/exit")
+
+        # Notify the broker that the plugin has started:
+        pluginPath = os.path.dirname(os.path.realpath(__file__))
+        self.mqtt_client.publish("microdrop/droplet-planning-plugin/plugin-started",
+            json.dumps(pluginPath), retain=True)
 
     @property
     def repeat_duration_s(self):
@@ -387,7 +428,8 @@ class DropletPlanningPlugin(Plugin, pmh.BaseMqttReactor):
             self.trail_length = json.loads(msg.payload, object_hook=pandas_object_hook)
         if msg.topic == "microdrop/put/droplet-planning-plugin/state/transition-duration-ms":
             self.transition_duration_ms = json.loads(msg.payload, object_hook=pandas_object_hook)
-
+        if msg.topic == "microdrop/droplet-planning-plugin/exit":
+            self.exit()
     def on_plugin_enable(self):
         self.route_controller = RouteController(self)
         form = flatlandToDict(self.StepFields)
@@ -599,7 +641,9 @@ class DropletPlanningPlugin(Plugin, pmh.BaseMqttReactor):
 
 
 PluginGlobals.pop_env()
+dpp = DropletPlanningPlugin()
 
-from ._version import get_versions
-__version__ = get_versions()['version']
-del get_versions
+# REVIEW: Removing get version (maybe bad idea?)
+# from ._version import get_versions
+# __version__ = get_versions()['version']
+# del get_versions

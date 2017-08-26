@@ -1,0 +1,22 @@
+{
+  "name": "droplet_planning_plugin",
+  "version": "1.0.0",
+  "description": "Create and Execute Drop Paths",
+  "main": "index.js",
+  "scripts": {
+    "start": "python __init__.py"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wheeler-microfluidics/droplet-planning-plugin.git"
+  },
+  "keywords": [
+    "droplet_planning_plugin"
+  ],
+  "author": "Christian Fobel",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/wheeler-microfluidics/droplet-planning-plugin/issues"
+  },
+  "homepage": "https://github.com/wheeler-microfluidics/droplet-planning-plugin#readme"
+}
