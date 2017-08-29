@@ -348,6 +348,11 @@ class DropletPlanningPlugin(Plugin, pmh.BaseMqttReactor):
         self.mqtt_client.publish("microdrop/droplet-planning-plugin/plugin-started",
             json.dumps(pluginPath), retain=True)
 
+        # Publish the schema definition:
+        form = flatlandToDict(self.StepFields)
+        self.mqtt_client.publish('microdrop/droplet-planning-plugin/update-schema',
+                                  json.dumps(form),
+                                  retain=True)
     @property
     def repeat_duration_s(self):
         return self._props["repeat_duration_s"]
@@ -358,6 +363,8 @@ class DropletPlanningPlugin(Plugin, pmh.BaseMqttReactor):
 
     @property
     def routes(self):
+        if self._props["routes"] is None:
+            self._props["routes"] = RouteController.default_routes()
         return self._props["routes"]
 
     @routes.setter
@@ -406,6 +413,12 @@ class DropletPlanningPlugin(Plugin, pmh.BaseMqttReactor):
         Callback for when a ``PUBLISH`` message is received from the broker.
         '''
         logger.info('[on_message] %s: "%s"', msg.topic, msg.payload)
+        try:
+            json.loads(msg.payload)
+        except ValueError, e:
+            print "Message contains invalid json"
+            return False
+
         if msg.topic == 'microdrop/dmf-device-ui/add-route':
             self.add_route(json.loads(msg.payload))
         if msg.topic == 'microdrop/dmf-device-ui/clear-routes':
@@ -430,10 +443,11 @@ class DropletPlanningPlugin(Plugin, pmh.BaseMqttReactor):
             self.transition_duration_ms = json.loads(msg.payload, object_hook=pandas_object_hook)
         if msg.topic == "microdrop/droplet-planning-plugin/exit":
             self.exit()
+
     def on_plugin_enable(self):
         self.route_controller = RouteController(self)
         form = flatlandToDict(self.StepFields)
-        self.mqtt_client.publish('microdrop/droplet-planning-plugin/schema',
+        self.mqtt_client.publish('microdrop/droplet-planning-plugin/update-schema',
                                   json.dumps(form),
                                   retain=True)
 
