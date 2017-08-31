@@ -14,7 +14,7 @@
     "droplet_planning_plugin"
   ],
   "author": "Christian Fobel",
-  "license": "ISC",
+  "license": "BSD",
   "bugs": {
     "url": "https://github.com/wheeler-microfluidics/droplet-planning-plugin/issues"
   },

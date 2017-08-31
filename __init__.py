@@ -301,6 +301,7 @@ class DropletPlanningPlugin(Plugin, pmh.BaseMqttReactor):
         self.step_start_time = None
         self.route_controller = None
         self.should_exit = False
+        self.step_number = None
         pmh.BaseMqttReactor.__init__(self)
         self._props = {
             "routes": None,
@@ -330,6 +331,22 @@ class DropletPlanningPlugin(Plugin, pmh.BaseMqttReactor):
         self.should_exit = True
         self.mqtt_client.disconnect()
 
+    def onFindExecutablePluginsCalled(self, payload, args):
+        """Implement if you want your plugin to respond to protocol execution"""
+        self.mqtt_client.publish("microdrop/droplet-planning-plugin/executable-plugin-found",
+                                 json.dumps(None))
+
+    def onRunStep(self, payload, args):
+        """Execute Step"""        
+        # XXX: Depricating previous method to label schema
+        if self.url_safe_plugin_name in payload:
+            step = payload[self.url_safe_plugin_name]
+        elif self.url_safe_plugin_name.replace("_","-") in payload:
+            step = payload[self.url_safe_plugin_name.replace("_","-")]
+        else:
+            return
+        self.execute_routes(step)
+
     def on_connect(self, client, userdata, flags, rc):
         self.mqtt_client.subscribe("microdrop/dmf-device-ui/add-route")
         self.mqtt_client.subscribe("microdrop/dmf-device-ui/clear-routes")
@@ -343,10 +360,14 @@ class DropletPlanningPlugin(Plugin, pmh.BaseMqttReactor):
         self.mqtt_client.subscribe("microdrop/put/droplet-planning-plugin/state/transition-duration-ms")
         self.mqtt_client.subscribe("microdrop/droplet-planning-plugin/exit")
 
+        # XXX: Wheezy routing doesnt support {*} wildcard
+        self.addGetRoute("microdrop/{pluginName}/find-executable-plugins", self.onFindExecutablePluginsCalled)
+        self.addGetRoute("microdrop/{pluginName}/run-step", self.onRunStep)
+        self.subscribe()
+
         # Notify the broker that the plugin has started:
-        pluginPath = os.path.dirname(os.path.realpath(__file__))
         self.mqtt_client.publish("microdrop/droplet-planning-plugin/plugin-started",
-            json.dumps(pluginPath), retain=True)
+            json.dumps(self.plugin_path), retain=True)
 
         # Publish the schema definition:
         form = flatlandToDict(self.StepFields)
@@ -413,6 +434,8 @@ class DropletPlanningPlugin(Plugin, pmh.BaseMqttReactor):
         Callback for when a ``PUBLISH`` message is received from the broker.
         '''
         logger.info('[on_message] %s: "%s"', msg.topic, msg.payload)
+        print msg.topic
+
         try:
             json.loads(msg.payload)
         except ValueError, e:
@@ -443,6 +466,10 @@ class DropletPlanningPlugin(Plugin, pmh.BaseMqttReactor):
             self.transition_duration_ms = json.loads(msg.payload, object_hook=pandas_object_hook)
         if msg.topic == "microdrop/droplet-planning-plugin/exit":
             self.exit()
+
+        method, args = self.router.match(msg.topic)
+        if method:
+            method(json.loads(msg.payload, object_hook=pandas_object_hook), args)
 
     def on_plugin_enable(self):
         self.route_controller = RouteController(self)
@@ -525,6 +552,8 @@ class DropletPlanningPlugin(Plugin, pmh.BaseMqttReactor):
         duration, *cycle* routes (i.e., routes that terminate at the start
         electrode) will repeat as necessary.
         '''
+        self.mqtt_client.publish('microdrop/droplet-planning-plugin/step-complete',
+                                 json.dumps(None))
 
         step_duration_s = (datetime.now() -
                            self.step_start_time).total_seconds()
@@ -547,8 +576,8 @@ class DropletPlanningPlugin(Plugin, pmh.BaseMqttReactor):
                         1, si_format(step_duration_s))
             # Transitions along all droplet routes have been processed.
             # Signal step has completed and reset plugin step state.
-            msg = {"plugin_name": self.name, "return_value": None}
-            self.mqtt_client.publish('microdrop/droplet-planning-plugin/step-complete', json.dumps(msg))
+            # msg = {"plugin_name": self.name, "return_value": None}
+            # self.mqtt_client.publish('microdrop/droplet-planning-plugin/step-complete', json.dumps(msg))
 
     def on_step_options_swapped(self, plugin, old_step_number, step_number):
         """
@@ -649,6 +678,7 @@ class DropletPlanningPlugin(Plugin, pmh.BaseMqttReactor):
 
             route_controller = RouteController(self)
             route_controller.execute_routes(df_routes, transition_duration_ms,
+                                            on_complete=self.on_step_routes_complete,
                                             trail_length=trail_length)
         except:
             logger.error(str(data), exc_info=True)
