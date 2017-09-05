@@ -16,12 +16,16 @@ requirements:
     - flatland-fork
     - pandas
     - path_helpers >=0.2.post4
+    - pandas-helpers
+    - paho-mqtt-helpers >= 0.2
     - si-prefix
 
   run:
     - flatland-fork
     - pandas
     - path_helpers >=0.2.post4
+    - pandas-helpers
+    - paho-mqtt-helpers >= 0.2
     - si-prefix
 
 about:
