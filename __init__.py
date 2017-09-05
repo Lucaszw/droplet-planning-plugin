@@ -31,23 +31,17 @@ from flatland import Integer, Form
 from flatland.validation import ValueAtLeast
 from flatland.out.markup import Generator
 from flatland_helpers import flatlandToDict
-from microdrop.app_context import get_app, get_hub_uri
-from microdrop.plugin_helpers import StepOptionsController, get_plugin_info
-from microdrop.plugin_manager import (PluginGlobals, Plugin, IPlugin,
-                                      ScheduleRequest, implements, emit_signal)
-# from pygtkhelpers.utils import refresh_gui
-from path_helpers import path
-from si_prefix import si_format
-from zmq_plugin.schema import PandasJsonEncoder, pandas_object_hook
 
-import gobject
+# from pygtkhelpers.utils import refresh_gui
+from si_prefix import si_format
+from pandas_helpers import PandasJsonEncoder, pandas_object_hook
+
 import pandas as pd
 import paho_mqtt_helpers as pmh
 import zmq
 
 logger = logging.getLogger(__name__)
 
-PluginGlobals.push_env('microdrop.managed')
 
 class RouteController(object):
     '''
@@ -242,7 +236,6 @@ class RouteController(object):
         Reset execution state.
         '''
         if 'timeout_id' in self.route_info:
-            gobject.source_remove(self.route_info['timeout_id'])
             del self.route_info['timeout_id']
 
         if ('electrode_ids' in self.route_info and
@@ -262,13 +255,10 @@ class RouteController(object):
         self.route_info = {'transition_counter': 0}
 
 
-class DropletPlanningPlugin(Plugin, pmh.BaseMqttReactor):
+class DropletPlanningPlugin(pmh.BaseMqttReactor):
     """
     This class is automatically registered with the PluginManager.
     """
-    implements(IPlugin)
-    version = get_plugin_info(path(__file__).parent).version
-    plugin_name = get_plugin_info(path(__file__).parent).plugin_name
 
     '''
     StepFields
@@ -337,7 +327,7 @@ class DropletPlanningPlugin(Plugin, pmh.BaseMqttReactor):
                                  json.dumps(None))
 
     def onRunStep(self, payload, args):
-        """Execute Step"""        
+        """Execute Step"""
         # XXX: Depricating previous method to label schema
         if self.url_safe_plugin_name in payload:
             step = payload[self.url_safe_plugin_name]
@@ -684,7 +674,6 @@ class DropletPlanningPlugin(Plugin, pmh.BaseMqttReactor):
             logger.error(str(data), exc_info=True)
 
 
-PluginGlobals.pop_env()
 dpp = DropletPlanningPlugin()
 
 # REVIEW: Removing get version (maybe bad idea?)
