@@ -4,7 +4,7 @@ source:
   git_url: ../
 
 package:
-  name: droplet-planning-plugin-requirements
+  name: microdrop.droplet-planning-plugin
 {% if GIT_DESCRIBE_NUMBER > '0' %}
   version: {{ GIT_DESCRIBE_TAG[1:] }}.post{{ GIT_DESCRIBE_NUMBER }}
 {% else %}
@@ -13,24 +13,16 @@ package:
 
 requirements:
   build:
-    - microdrop-plugin-template
-    - microdrop-utility
+    - flatland
     - pandas
     - path_helpers >=0.2.post4
-    - pyyaml
     - si-prefix
-    - wheeler.pygtkhelpers
-    - zmq-plugin >=0.2.post2
 
   run:
-    - microdrop-plugin-template
-    - microdrop-utility
+    - flatland
     - pandas
     - path_helpers >=0.2.post4
-    - pyyaml
     - si-prefix
-    - wheeler.pygtkhelpers
-    - zmq-plugin >=0.2.post2
 
 about:
   home: https://github.com/Lucaszw/droplet-planning-plugin

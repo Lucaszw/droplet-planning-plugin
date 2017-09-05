@@ -32,13 +32,9 @@ from flatland.validation import ValueAtLeast
 from flatland.out.markup import Generator
 from flatland_helpers import flatlandToDict
 
-# from pygtkhelpers.utils import refresh_gui
-from si_prefix import si_format
-from pandas_helpers import PandasJsonEncoder, pandas_object_hook
-
 import pandas as pd
+from pandas_helpers import PandasJsonEncoder, pandas_object_hook
 import paho_mqtt_helpers as pmh
-import zmq
 
 logger = logging.getLogger(__name__)
 

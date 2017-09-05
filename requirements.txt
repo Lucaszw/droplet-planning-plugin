@@ -1,8 +1,0 @@
-microdrop-plugin-template
-microdrop-utility
-pandas
-path-helpers
-wheeler.pygtkhelpers
-pyyaml
-si-prefix
-zmq-plugin
