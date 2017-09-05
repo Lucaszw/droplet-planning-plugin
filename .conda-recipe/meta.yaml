@@ -13,13 +13,13 @@ package:
 
 requirements:
   build:
-    - flatland
+    - flatland-fork
     - pandas
     - path_helpers >=0.2.post4
     - si-prefix
 
   run:
-    - flatland
+    - flatland-fork
     - pandas
     - path_helpers >=0.2.post4
     - si-prefix
