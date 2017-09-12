@@ -357,7 +357,7 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
         self.mqtt_client.loop_forever()
 
     def exit(self, a=None, b=None):
-        self.mqtt_client.publish('microdrop/droplet-planning-plugin/'
+        self.mqtt_client.publish('microdrop/droplet-planning-plugin/signal/'
                                  'plugin-exited', "{}", retain=True)
         self.should_exit = True
         self.mqtt_client.disconnect()
@@ -434,7 +434,7 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
     def on_connect(self, client, userdata, flags, rc):
         self.listen()
         # Notify the broker that the plugin has started:
-        self.mqtt_client.publish("microdrop/droplet-planning-plugin/"
+        self.mqtt_client.publish("microdrop/droplet-planning-plugin/signal/"
                                  "plugin-started",
                                  json.dumps(self.plugin_path), retain=True)
 
