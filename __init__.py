@@ -358,7 +358,7 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
 
     def exit(self, a=None, b=None):
         self.mqtt_client.publish('microdrop/droplet-planning-plugin/signal/'
-                                 'plugin-exited', "{}", retain=True)
+                                 'plugin-exited', "{}", retain=False)
         self.should_exit = True
         self.mqtt_client.disconnect()
 
@@ -436,7 +436,7 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
         # Notify the broker that the plugin has started:
         self.mqtt_client.publish("microdrop/droplet-planning-plugin/signal/"
                                  "plugin-started",
-                                 json.dumps(self.plugin_path), retain=True)
+                                 json.dumps(self.plugin_path), retain=False)
 
         # Publish the schema definition:
         form = flatlandToDict(self.StepFields)
@@ -458,7 +458,7 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
             payload = None
 
         if method:
-            method(payload,args)
+            method(payload, args)
 
     def on_plugin_enable(self):
         self.route_controller = RouteController(self)
