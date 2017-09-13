@@ -448,16 +448,17 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
         '''
         Callback for when a ``PUBLISH`` message is received from the broker.
         '''
+        method, args = self.router.match(msg.topic)
+
         try:
-            json.loads(msg.payload)
+            payload = json.loads(msg.payload, object_hook=pandas_object_hook)
         except ValueError:
             print "Message contains invalid json"
-            return False
+            print "topic: " + msg.topic
+            payload = None
 
-        method, args = self.router.match(msg.topic)
         if method:
-            method(json.loads(msg.payload, object_hook=pandas_object_hook),
-                   args)
+            method(payload,args)
 
     def on_plugin_enable(self):
         self.route_controller = RouteController(self)
