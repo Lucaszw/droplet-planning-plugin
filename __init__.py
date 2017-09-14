@@ -395,7 +395,7 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
         self.trail_length = payload["trailLength"]
 
     def onPutRoutes(self, payload, args):
-        self._routes = payload
+        self._routes = payload["dropRoutes"]
 
     def onPutRouteRepeats(self, payload, args):
         self.route_repeats = payload["routeRepeats"]
