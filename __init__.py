@@ -358,7 +358,8 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
 
     def exit(self, a=None, b=None):
         self.mqtt_client.publish('microdrop/droplet-planning-plugin/signal/'
-                                 'plugin-exited', "{}", retain=False)
+                                 'plugin-exited', json.dumps(self.plugin_path),
+                                 retain=False)
         self.should_exit = True
         self.mqtt_client.disconnect()
 
