@@ -29,7 +29,7 @@ from flatland.validation import ValueAtLeast
 from flatland_helpers import flatlandToDict
 
 import pandas as pd
-from pandas_helpers import PandasJsonEncoder, pandas_object_hook
+from pandas_helpers import PandasJsonEncoder
 import paho_mqtt_helpers as pmh
 from si_prefix import si_format
 
@@ -444,22 +444,6 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
         self.mqtt_client.publish('microdrop/droplet-planning-plugin/signal/'
                                  'update-schema', json.dumps(form),
                                  retain=True)
-
-    def on_message(self, client, userdata, msg):
-        '''
-        Callback for when a ``PUBLISH`` message is received from the broker.
-        '''
-        method, args = self.router.match(msg.topic)
-
-        try:
-            payload = json.loads(msg.payload, object_hook=pandas_object_hook)
-        except ValueError:
-            print "Message contains invalid json"
-            print "topic: " + msg.topic
-            payload = None
-
-        if method:
-            method(payload, args)
 
     def on_plugin_enable(self):
         self.route_controller = RouteController(self)
