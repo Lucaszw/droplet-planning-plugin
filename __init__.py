@@ -268,7 +268,6 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
         self.name = self.plugin_name
         self.step_start_time = None
         self.route_controller = None
-        self.should_exit = False
         self.step_number = None
         pmh.BaseMqttReactor.__init__(self)
         self._props = {
@@ -403,7 +402,6 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
         self.bindPutMsg("electrodes-model", "electrode-states",
                         "put-electrode-states")
         self.bindPutMsg("routes-model", "routes", "put-routes")
-
         self.subscribe()
 
         # Publish the schema definition:
