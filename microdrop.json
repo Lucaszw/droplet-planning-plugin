@@ -1,5 +1,5 @@
 {
-  "name": "droplet-planning-plugin",
+  "name": "droplet_planning_plugin",
   "version": "1.0.1",
   "scripts": {
     "start": "python __init__.py"

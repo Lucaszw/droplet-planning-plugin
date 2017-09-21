@@ -377,6 +377,9 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
         else:
             self.clear_routes()
 
+    def onRunningStateRequested(self, payload, args):
+        self.trigger("send-running-state", self.plugin_path)
+
     def listen(self):
         self.addGetRoute("microdrop/dmf-device-ui/clear-routes",
                          self.onClearRoutes)
@@ -402,6 +405,12 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
         self.bindPutMsg("electrodes-model", "electrode-states",
                         "put-electrode-states")
         self.bindPutMsg("routes-model", "routes", "put-routes")
+
+        # TODO: Create MicrodropPlugin base class (that inherits from paho)
+        self.onSignalMsg("web-server", "running-state-requested",
+                         self.onRunningStateRequested)
+        self.bindSignalMsg("running", "send-running-state")
+
         self.subscribe()
 
         # Publish the schema definition:
