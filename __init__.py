@@ -270,81 +270,23 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
         self.route_controller = None
         self.step_number = None
         pmh.BaseMqttReactor.__init__(self)
-        self._props = {
-            "routes": None,
-            "transition_duration_ms": None,
-            "repeat_duration_s": None,
-            "trail_length": None,
-            "route_repeats": None
-            }
+        self.routes = None
+        self.transition_duration_ms = None
+        self.repeat_duration_s = None
+        self.trail_length = None
+        self.route_repeats = None
         self.start()
-
-    @property
-    def repeat_duration_s(self):
-        return self._props["repeat_duration_s"]
-
-    @repeat_duration_s.setter
-    def repeat_duration_s(self, value):
-        self._props["repeat_duration_s"] = value
-
-    @property
-    def routes(self):
-        if self._props["routes"] is None:
-            self._props["routes"] = RouteController.default_routes()
-        return self._props["routes"]
-
-    @routes.setter
-    def routes(self, value):
-        self._routes = value
-        self.trigger("put-routes", value)
-
-    @property
-    def _routes(self):
-        return self._props["routes"]
-
-    @_routes.setter
-    def _routes(self, value):
-        if value is None:
-            self.routes = RouteController.default_routes()
-        else:
-            self._props["routes"] = value
-
-    @property
-    def route_repeats(self):
-        return self._props["route_repeats"]
-
-    @route_repeats.setter
-    def route_repeats(self, value):
-        self._props["route_repeats"] = value
-
-    @property
-    def trail_length(self):
-        return self._props["trail_length"]
-
-    @trail_length.setter
-    def trail_length(self, value):
-        self._props["trail_length"] = value
-
-    @property
-    def transition_duration_ms(self):
-        return self._props["transition_duration_ms"]
-
-    @transition_duration_ms.setter
-    def transition_duration_ms(self, value):
-        self._props["transition_duration_ms"] = value
 
     def onFindExecutablePluginsCalled(self, payload, args):
         """Implement method for plugin to respond to protocol execution"""
         self.trigger("executable-plugin-found", None)
 
-    def onRunStep(self, payload, args):
+    def on_run_step(self, payload, args):
         """Execute Step"""
         data = payload['step']
         # XXX: Depricating previous method to label schema
-        if self.url_safe_plugin_name in data:
-            step = data[self.url_safe_plugin_name]
-        elif self.url_safe_plugin_name.replace("_", "-") in data:
-            step = data[self.url_safe_plugin_name.replace("_", "-")]
+        if "routes-model" in data:
+            step = data["routes-model"]
         else:
             return
         self.execute_routes(step)
@@ -353,20 +295,35 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
         """ Called when add route message received """
         self.add_route(payload)
 
-    def onPutTransitionDurationMS(self, payload, args):
-        self.transition_duration_ms = payload["transitionDurationMilliseconds"]
+    def update_routes(self, new_routes):
+        if new_routes is None:
+            self.routes = RouteController.default_routes()
+            self.trigger("put-routes", {'drop_routes': self.routes})
+        else:
+            self.routes = new_routes
 
-    def onPutTrailLength(self, payload, args):
-        self.trail_length = payload["trailLength"]
+    def on_update_routes(self, payload, args):
+        # XXX: Migrate to using underscore based keys (drop_routes):
+        if 'dropRoutes' in payload.keys():
+            self.update_routes(payload['dropRoutes'])
+        if 'drop_routes' in payload.keys():
+            self.update_routes(payload['drop_routes'])
 
-    def onPutRoutes(self, payload, args):
-        self._routes = payload["dropRoutes"]
+    def on_update_route_options(self, payload, args):
+        if 'transition_duration_ms' in payload.keys():
+            self.transition_duration_ms = payload['transition_duration_ms']
+        if 'repeat_duration_s' in payload.keys():
+            self.repeat_duration_s = payload['repeat_duration_s']
+        if 'trail_length' in payload.keys():
+            self.trail_length = payload['trail_length']
+        if 'route_repeats' in payload.keys():
+            self.route_repeats = payload['route_repeats']
 
-    def onPutRouteRepeats(self, payload, args):
-        self.route_repeats = payload["routeRepeats"]
-
-    def onPutRepeatDurationSeconds(self, payload, args):
-        self.repeat_duration_s = payload["repeatDurationSeconds"]
+        # XXX: Migrate to using underscore based keys:
+        if 'dropRoutes' in payload.keys():
+            self.update_routes(payload['dropRoutes'])
+        if 'drop_routes' in payload.keys():
+            self.update_routes(payload['drop_routes'])
 
     def onExecuteRoutes(self, payload, args):
         self.execute_routes(payload)
@@ -389,15 +346,13 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
 
         self.onSignalMsg("{pluginName}", "find-executable-plugins",
                          self.onFindExecutablePluginsCalled)
-        self.onSignalMsg("{pluginName}", "run-step", self.onRunStep)
+        self.onSignalMsg("{pluginName}", "run-step", self.on_run_step)
 
-        self.onPutMsg("routes", self.onPutRoutes)
-        self.onPutMsg("route-repeats", self.onPutRouteRepeats)
-        self.onPutMsg("repeat-duration-s", self.onPutRepeatDurationSeconds)
-        self.onPutMsg("trail-length", self.onPutTrailLength)
-        self.onPutMsg("transition-duration-ms", self.onPutTransitionDurationMS)
+        self.onStateMsg("routes-model", "routes", self.on_update_routes)
+        self.onStateMsg("routes-model", "route-options",
+                        self.on_update_route_options)
 
-        self.bindSignalMsg("update-schema", "update-schema")
+        self.bindTriggerMsg("routes-model", "update-schema", "update-schema")
         self.bindSignalMsg("step-complete", "step-complete")
         self.bindSignalMsg("executable-plugin-found",
                            "executable-plugin-found")
@@ -536,6 +491,8 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
         drop_route.insert(0, 'route_i', route_i)
         drop_routes = drop_routes.append(drop_route, ignore_index=True)
         self.routes = drop_routes
+
+        self.trigger("put-routes", {'drop_routes': self.routes})
         return {'route_i': route_i, 'drop_routes': drop_routes}
 
     def clear_routes(self, electrode_id=None, step_number=None):
@@ -555,6 +512,7 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
             df_routes = df_routes.loc[~df_routes.route_i
                                       .isin(routes_to_clear.tolist())].copy()
         self.routes = df_routes
+        self.trigger("put-routes", {'drop_routes': self.routes})
 
     def execute_routes(self, data):
         # TODO allow for passing of both electrode_id and route_i
