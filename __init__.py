@@ -291,7 +291,7 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
             return
         self.execute_routes(step)
 
-    def onAddRoute(self, payload, args):
+    def on_add_route(self, payload, args):
         """ Called when add route message received """
         self.add_route(payload)
 
@@ -328,7 +328,7 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
     def onExecuteRoutes(self, payload, args):
         self.execute_routes(payload)
 
-    def onClearRoutes(self, payload, args):
+    def on_clear_routes(self, payload, args):
         if payload:
             self.clear_routes(electrode_id=payload['electrode_id'])
         else:
@@ -338,11 +338,11 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
         self.trigger("send-running-state", self.plugin_path)
 
     def listen(self):
-        self.addGetRoute("microdrop/dmf-device-ui/clear-routes",
-                         self.onClearRoutes)
+        self.onTriggerMsg("clear-routes", self.on_clear_routes)
         self.addGetRoute("microdrop/dmf-device-ui/execute-routes",
                          self.onExecuteRoutes)
-        self.addGetRoute("microdrop/{pluginName}/add-route", self.onAddRoute)
+        self.onTriggerMsg("add-route", self.on_add_route)
+        # self.addGetRoute("microdrop/{pluginName}/add-route",self.on_add_route)
 
         self.onSignalMsg("{pluginName}", "find-executable-plugins",
                          self.onFindExecutablePluginsCalled)
