@@ -29,7 +29,7 @@ from flatland_helpers import flatlandToDict
 import pandas as pd
 from pandas_helpers import PandasJsonEncoder
 import paho_mqtt_helpers as pmh
-from si_prefix import si_format
+# from si_prefix import si_format
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,7 @@ class RouteController(object):
                                            'transition_i'], dtype='int32')
 
     def execute_routes(self, df_routes, transition_duration_ms,
+                       repeat_duration_s, route_repeats,
                        on_complete=None, on_error=None, trail_length=1,
                        cyclic=True, acyclic=True):
         '''
@@ -75,6 +76,8 @@ class RouteController(object):
         route_info['transition_counter'] = 0
         route_info['transition_duration_ms'] = transition_duration_ms
         route_info['trail_length'] = trail_length
+        route_info['repeat_duration_s'] = repeat_duration_s
+        route_info['route_repeats'] = route_repeats
 
         # Find cycle routes, i.e., where first electrode matches last
         # electrode.
@@ -137,8 +140,7 @@ class RouteController(object):
                 # All route transitions have executed.
                 self.reset()
                 if on_complete is not None:
-                    on_complete(route_info['start_time'],
-                                route_info['electrode_ids'])
+                    on_complete(route_info)
         except:
             # An error occurred while executing routes.
             if on_error is not None:
@@ -202,11 +204,8 @@ class RouteController(object):
         modified_electrode_states = (active_electrode_mask.astype(bool)
                                      .sort_values(ascending=False))
 
-        data = {}
-        data['electrode_states'] = modified_electrode_states
-        data['save'] = False
-
-        self.parent.trigger("put-electrode-states", data)
+        self.parent.trigger("update-electrodes",
+                            {'df_electrodes': modified_electrode_states})
 
     def reset(self):
         '''
@@ -266,15 +265,15 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
 
     def __init__(self, *args, **kwargs):
         self.name = self.plugin_name
-        self.step_start_time = None
         self.route_controller = None
         self.step_number = None
         pmh.BaseMqttReactor.__init__(self)
-        self.routes = None
-        self.transition_duration_ms = None
-        self.repeat_duration_s = None
-        self.trail_length = None
-        self.route_repeats = None
+        self.routes = RouteController.default_routes()
+        self.transition_duration_ms = 750
+        self.repeat_duration_s = 0
+        self.trail_length = 1
+        self.route_repeats = 1
+        self.repeat_i = 0
         self.start()
 
     def onFindExecutablePluginsCalled(self, payload, args):
@@ -298,35 +297,16 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
     def update_routes(self, new_routes):
         if new_routes is None:
             self.routes = RouteController.default_routes()
-            self.trigger("put-routes", {'drop_routes': self.routes})
+            self.trigger("add-dataframe", {'drop_routes': self.routes})
         else:
             self.routes = new_routes
 
     def on_update_routes(self, payload, args):
-        # XXX: Migrate to using underscore based keys (drop_routes):
-        if 'dropRoutes' in payload.keys():
-            self.update_routes(payload['dropRoutes'])
-        if 'drop_routes' in payload.keys():
-            self.update_routes(payload['drop_routes'])
+        dataframe = pd.DataFrame(payload)
+        self.update_routes(dataframe)
 
-    def on_update_route_options(self, payload, args):
-        if 'transition_duration_ms' in payload.keys():
-            self.transition_duration_ms = payload['transition_duration_ms']
-        if 'repeat_duration_s' in payload.keys():
-            self.repeat_duration_s = payload['repeat_duration_s']
-        if 'trail_length' in payload.keys():
-            self.trail_length = payload['trail_length']
-        if 'route_repeats' in payload.keys():
-            self.route_repeats = payload['route_repeats']
-
-        # XXX: Migrate to using underscore based keys:
-        if 'dropRoutes' in payload.keys():
-            self.update_routes(payload['dropRoutes'])
-        if 'drop_routes' in payload.keys():
-            self.update_routes(payload['drop_routes'])
-
-    def onExecuteRoutes(self, payload, args):
-        self.execute_routes(payload)
+    def on_execute_routes(self, payload, args):
+        self.execute_routes(payload['props'])
 
     def on_clear_routes(self, payload, args):
         if payload:
@@ -339,8 +319,9 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
 
     def listen(self):
         self.onTriggerMsg("clear-routes", self.on_clear_routes)
+        self.onTriggerMsg("execute-routes", self.on_execute_routes)
         self.addGetRoute("microdrop/dmf-device-ui/execute-routes",
-                         self.onExecuteRoutes)
+                         self.on_execute_routes)
         self.onTriggerMsg("add-route", self.on_add_route)
         # self.addGetRoute("microdrop/{pluginName}/add-route",self.on_add_route)
 
@@ -349,19 +330,18 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
         self.onSignalMsg("{pluginName}", "run-step", self.on_run_step)
 
         self.onStateMsg("routes-model", "routes", self.on_update_routes)
-        self.onStateMsg("routes-model", "route-options",
-                        self.on_update_route_options)
 
         self.bindTriggerMsg("routes-model", "update-schema", "update-schema")
+        self.bindTriggerMsg("routes-model", "add-dataframe", "add-dataframe")
+
         self.bindSignalMsg("step-complete", "step-complete")
         self.bindSignalMsg("executable-plugin-found",
                            "executable-plugin-found")
 
-        self.bindPutMsg("electrodes-model", "electrode-states",
-                        "put-electrode-states")
-        self.bindPutMsg("routes-model", "routes", "put-routes")
+        self.bindTriggerMsg("electrodes-model", "from-dataframe",
+                            "update-electrodes")
 
-        # TODO: Create MicrodropPlugin base class (that inherits from paho)
+        # TODO: Create MicrodropPlugin base class separate from web-server
         self.onSignalMsg("web-server", "running-state-requested",
                          self.onRunningStateRequested)
         self.bindSignalMsg("running", "send-running-state")
@@ -378,44 +358,7 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
         msg = {"plugin_name": self.name, "return_value": 'Fail'}
         self.trigger("step-complete", msg)
 
-    def on_protocol_pause(self):
-        self.kill_running_step()
-
-    def kill_running_step(self):
-        # Stop execution of any routes that are currently running.
-        if self.route_controller is not None:
-            self.route_controller.reset()
-
-    def on_step_run(self):
-        """
-        Handler called whenever a step is executed. Note that this signal
-        is only emitted in realtime mode or if a protocol is running.
-
-        Plugins that handle this signal must emit the on_step_complete
-        signal once they have completed the step. The protocol controller
-        will wait until all plugins have completed the current step before
-        proceeding.
-
-        return_value can be one of:
-            None
-            'Repeat' - repeat the step
-            or 'Fail' - unrecoverable error (stop the protocol)
-        """
-        self.kill_running_step()
-
-        try:
-            self.repeat_i = 0
-            self.step_start_time = datetime.now()
-            df_routes = self.routes
-            self.route_controller.execute_routes(
-                df_routes, self.transition_duration_ms,
-                trail_length=self.trail_length,
-                on_complete=self.on_step_routes_complete,
-                on_error=self.on_error)
-        except:
-            self.on_error()
-
-    def on_step_routes_complete(self, start_time, electrode_ids):
+    def on_step_routes_complete(self, info):
         '''
         Callback function executed when all concurrent routes for a step have
         completed a single run.
@@ -424,51 +367,36 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
         duration, *cycle* routes (i.e., routes that terminate at the start
         electrode) will repeat as necessary.
         '''
-        self.trigger("step-complete", None)
 
-        step_duration_s = (datetime.now() -
-                           self.step_start_time).total_seconds()
-        if ((self.repeat_duration_s > 0 and step_duration_s <
-             self.repeat_duration_s) or (
-                 self.repeat_i + 1 < self.route_repeats)):
-            # Either repeat duration has not been met, or the specified number
-            # of repetitions has not been met.  Execute another iteration of
-            # the routes.
-            self.repeat_i += 1
-            df_routes = self.routes
-            self.route_controller.execute_routes(
-                df_routes, self.transition_duration_ms,
-                trail_length=self.trail_length,
-                cyclic=True, acyclic=False,
-                on_complete=self.on_step_routes_complete,
-                on_error=self.on_error)
+        step_duration_s = (datetime.now() - info['start_time']).total_seconds()
+        should_repeat = False
+
+        if (self.repeat_i + 1 < info['route_repeats']):
+            should_repeat = True
+
+        # Step duration takes precedence over route repeats
+        if (step_duration_s > info['repeat_duration_s']):
+            should_repeat = False
+
+        if should_repeat:
+            try:
+                self.repeat_i += 1
+                df_routes = self.routes
+                self.route_controller.execute_routes(
+                    df_routes, info['transition_duration_ms'],
+                    trail_length=info['trail_length'],
+                    repeat_duration_s=info['repeat_duration_s'],
+                    route_repeats=info['route_repeats'],
+                    cyclic=True, acyclic=False,
+                    on_complete=self.on_step_routes_complete,
+                    on_error=self.on_error)
+            except Exception as e:
+                print "EXCEPTION"
+                raise e
+            print "RUN AGAIN"
         else:
-            logger.info('Completed routes (%s repeats in %ss)', self.repeat_i +
-                        1, si_format(step_duration_s))
-            # Transitions along all droplet routes have been processed.
-            # Signal step has completed and reset plugin step state.
-
-    def on_step_options_swapped(self, plugin, old_step_number, step_number):
-        """
-        Handler called when the step options are changed for a particular
-        plugin.  This will, for example, allow for GUI elements to be
-        updated based on step specified.
-
-        Parameters:
-            plugin : plugin instance for which the step options changed
-            step_number : step number that the options changed for
-        """
-        logger.info('[on_step_swapped] old step=%s, step=%s', old_step_number,
-                    step_number)
-        self.kill_running_step()
-
-    def on_step_swapped(self, old_step_number, step_number):
-        """
-        Handler called when the current step is swapped.
-        """
-        logger.info('[on_step_swapped] old step=%s, step=%s', old_step_number,
-                    step_number)
-        self.kill_running_step()
+            print "STEP COMPLETE"
+            self.trigger("step-complete", None)
 
     ###########################################################################
     # Step options dependent methods
@@ -492,7 +420,7 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
         drop_routes = drop_routes.append(drop_route, ignore_index=True)
         self.routes = drop_routes
 
-        self.trigger("put-routes", {'drop_routes': self.routes})
+        self.trigger("add-dataframe", {'drop_routes': self.routes})
         return {'route_i': route_i, 'drop_routes': drop_routes}
 
     def clear_routes(self, electrode_id=None, step_number=None):
@@ -512,12 +440,11 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
             df_routes = df_routes.loc[~df_routes.route_i
                                       .isin(routes_to_clear.tolist())].copy()
         self.routes = df_routes
-        self.trigger("put-routes", {'drop_routes': self.routes})
+        self.trigger("add-dataframe", {'drop_routes': self.routes})
 
     def execute_routes(self, data):
         # TODO allow for passing of both electrode_id and route_i
         # Currently electrode_id only
-
         try:
             df_routes = self.routes
 
@@ -531,20 +458,22 @@ class DropletPlanningPlugin(pmh.BaseMqttReactor):
             else:
                 trail_length = self.trail_length
 
-            if 'route_i' in data:
-                df_routes = df_routes.loc[df_routes.route_i == data['route_i']]
-            elif 'electrode_i' in data:
-                if data['electrode_i'] is not None:
-                    routes_to_execute = df_routes.loc[df_routes.electrode_i ==
-                                                      data['electrode_i'],
-                                                      'route_i']
-                    df_routes = df_routes.loc[df_routes.route_i
-                                              .isin(routes_to_execute
-                                                    .tolist())].copy()
+            if 'repeat_duration_s' in data:
+                repeat_duration_s = data['repeat_duration_s']
+            else:
+                repeat_duration_s = self.repeat_duration_s
 
-            route_controller = RouteController(self)
-            route_controller.execute_routes(
+            if 'route_repeats' in data:
+                route_repeats = data['route_repeats']
+            else:
+                route_repeats = self.route_repeats
+
+            self.route_controller = RouteController(self)
+
+            self.repeat_i = 0
+            self.route_controller.execute_routes(
                 df_routes, transition_duration_ms,
+                repeat_duration_s, route_repeats,
                 on_complete=self.on_step_routes_complete,
                 trail_length=trail_length)
         except:
